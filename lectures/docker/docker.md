@@ -19,6 +19,29 @@ Containerizing Services
 
 ---
 
+## Our Project
+
+1. Managed with git
+2. **Running Docker containers**
+3. Orchestrated with Kubernetes
+4. Tested in Gitlab
+5. Deployed with ArgoCD
+6. Monitored with Prometheus and Grafana
+
+---
+
+## Why Containerization?
+
+Modern DevOps projects have many separate components
+
+Each component requires its own libraries and configuration
+
+We wish to deploy, scale, and upgrade each component independently from others
+
+Containerization is one way to allow this
+
+---
+
 ## Docker Containers
 
 - Encapsulate application and libraries
@@ -127,12 +150,12 @@ Execute commands with a running container with `docker exec`
 ```bash
 docker exec container-name whoami
 ```
-Execute the `whoami` command inside `container-name`
+&rarr; Execute the `whoami` command inside `container-name`
 
 ```bash
 docker exec -it container-name bash
 ```
-Start an interactive _bash_ shell inside `container-name`
+&rarr; Start an interactive _bash_ shell inside `container-name`
 
 ---
 
@@ -183,6 +206,22 @@ $\Rightarrow$ Automate any annoying set up
 
 ---
 
+## Using Ephemeral Containers
+
+```bash
+docker run -it --rm ubuntu:26.04
+```
+Container will be deleted when it stops
+
+Any configuration will need to be repeated next time
+$\Rightarrow$ Script any configuration steps
+$\Rightarrow$ Build custom image already configured
+
+All state stored in container will be lost
+$\Rightarrow$ Store important state on docker host; mount onto container
+
+---
+
 ## Docker Volumes
 
 Docker **volumes** mount host directory inside container
@@ -198,6 +237,11 @@ docker run -it --rm --mount type=bind,source=$(pwd)/shared,target=/mnt/volume \
 ```
 - `source=` Absolute path on host (error if does not exist)
 - `target=` Absolute path in container
+
+<!--
+Backslash for line continuation.
+There to help us read everything; you can can put it all on one line in the terminal.
+-->
 
 ---
 
@@ -223,6 +267,20 @@ See `project/images/web-service`
 - Environment managed by _uv_
 
 We don't have these libraries installed in the Codespace
+
+---
+
+## Digression: Lock files
+
+Project dependencies stored in two files
+- `pyproject.yaml` lists dependencies author specified
+- `uv.lock` lists all packages installed, with specific versions
+
+If lock file exists, _uv_ can **reproduce** the exact environment
+
+Common DevOps practice; see also `package.json`, `package-lock.json` for _npm_ (_Node.js_); `Cargo.toml`, `Cargo.lock` for _Cargo_ (_Rust_)
+
+Also, helps you develop your **Software Bill of Materials (SBOM)**
 
 ---
 
@@ -311,7 +369,7 @@ See the _Ports_ pane next to _Terminal_
 
 Want to automate building and running our service
 
-`Dockerfile` is text file describing a Docker image
+`Dockerfile` is text file describing how to build a Docker image
 
 ---
 
@@ -323,7 +381,7 @@ Create file named `Dockerfile`:
 FROM ghcr.io/astral-sh/uv:python3.14-alpine
 
 ENV UV_COMPILE_BYTECODE=1
-ENV UV_LINK_MODY=copy
+ENV UV_LINK_MODE=copy
 
 WORKDIR /app
 
@@ -332,6 +390,11 @@ COPY . /app
 CMD ["sh", "-c", \
      "uv run gunicorn web_service:app --bind 0.0.0.0:8000 --timeout 120"]
 ```
+
+<!--
+Backslash for line continuation
+Trying to make it readable here, but can be on one line in actual Dockerfile.
+-->
 
 ---
 
@@ -401,7 +464,7 @@ Then copy relevant files into a second image
 FROM ghcr.io/astral-sh/uv:python3.14-alpine AS builder
 
 ENV UV_COMPILE_BYTECODE=1
-ENV UV_LINK_MODY=copy
+ENV UV_LINK_MODE=copy
 
 WORKDIR /app
 
@@ -475,6 +538,20 @@ FROM python@sha256:c6ead2...cb96fc
 ...
 ```
 
+A digest specifies one unchanging image &hellip;
+
+&hellip; but it can disappear from the source repository.
+
+<!--
+Discussion: Should we specify tags or digests
+Digests: Ensure reproducibility.  Slow supply chain attacks
+Tags: May get bugfixes, upgrades.
+
+Note that source repository can delete an image.  Having its
+digest is not enough to recreate it.  So probably a good idea
+to copy images you need to your own repository.  (Details later.)
+-->
+
 ---
 
 ## Environmental Variables
@@ -506,7 +583,8 @@ ENV VISIT_COUNTER_FILE="/var/lib/web-service/visits.txt"
 ENV OLLAMA_URL="http://localhost:11434"
 ENV OLLAMA_MODEL="qwen3:0.6b"
 
-CMD ["sh", "-c", "gunicorn web_service:app --bind 0.0.0.0:$PORT --timeout 120"]
+CMD ["sh", "-c", \
+     "gunicorn web_service:app --bind 0.0.0.0:$PORT --timeout 120"]
 ```
 
 ---
@@ -518,3 +596,241 @@ docker build . -t web-service-staged
 docker run --rm -v $(pwd)/count:/var/lib/web-service \
     -e PORT=3000 -p 8000:3000 web-service-staged
 ```
+
+`-e PORT=3000` sets the variable _PORT_ to "3000"
+`Dockerfile` uses `$PORT` to set the port _gunicorn_ serves at
+`-p 8000:3000` forwards local port 8000 to container port 3000
+$\Rightarrow$ Still shows up on port 8000 in Codespaces
+
+---
+
+## Running as User Other than _root_
+
+- Many containers run as container root user
+  - Not designed for multi-user operation
+- Many container escapes require root access within container
+  - Running as non-root user adds an additional hurdle
+
+Best practice for containers running public services: Run service as a non-root user in container
+
+---
+
+## Creating Another User (pt. 1)
+
+```Dockerfile
+...
+FROM python:3.14-alpine
+
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN addgroup -g $USER_GID -S appuser && \
+    adduser -u $USER_UID -S appuser -G appuser
+
+WORKDIR /app
+
+COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+...
+```
+
+Creates user _appuser_; switch ownership of copied files to _appuser_
+
+<!--
+This specifies the uid and gid of the added user.  This may be necessary
+to make bind mounts work; more on that later.
+-->
+
+---
+
+## Creating Another User (pt. 2)
+
+```Dockerfile
+...
+ENV OLLAMA_MODEL="qwen3:0.6b"
+
+RUN mkdir $(dirname $VISIT_COUNTER_FILE) && \
+    chown appuser:appuser $(dirname $VISIT_COUNTER_FILE)
+
+USER appuser
+
+CMD ["sh", "-c", \
+     "gunicorn web_service:app --bind 0.0.0.0:$PORT --timeout 120"]
+```
+
+Ensure _appuser_ can write to (default) `$VISIT_COUNTER_FILE`
+
+Switch to _appuser_ to run the Python service
+
+---
+
+## User IDs and Bind Mounts
+
+- File owner IDs are not translated across the container boundary (‽)
+  - Not a problem for the root user
+  - Can be a problem for non-root users
+- Here, we set the _appuser_ id to 1000, same as host user owning files
+  - `ARG` can be set at **build** time:
+    ```Docker
+    docker build --build-arg USER_UID=$(id -u) ...
+    ```
+  - This cannot be adjusted at **run** time
+
+---
+
+## User IDs and Bind Mounts
+
+Other solutions:
+- Run docker container as a different user:
+  ```bash
+  docker run --user $(id -u):$(id -g) ...
+  ```
+  - Not baked into image
+- Add **entrypoint** that creates new user, _chown_, and run application as new user
+- Kubernetes will handle ownership of mounts itself
+
+---
+
+## Container Registries
+
+A **container registry** stores and services container images
+- [Docker Hub](https://hub.docker.com/)
+- [GitHib Container Registry (ghcr.io)](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [Elastic Container Registry](https://aws.amazon.com/ecr/)
+
+Images uploaded for use on production systems
+- Reference as `registry.tld/image:tag` in docker command or file
+- Images automatically pulled when needed
+
+---
+
+## Uploading to a Container Registry
+
+1. Log in to the registry:
+   ```bash
+   docker login registry.tld
+   ```
+2. Tag the local image with the registry name:
+   ```bash
+   docker tag local-image registry.tld/image-name:tag
+   ```
+3. Push the new tag:
+   ```bash
+   docker push registry.tld/image-name:tag
+   ```
+
+<small>_N.B._ We will use the Gitlab container registry in a later session</small>
+<!--
+Demo
+docker login registry.digitalocean.com
+ - Enter token with registry read, update permissions as username and password
+ - or, docker login -u token -p token registry.digitalocean.com
+docker tag web-service registry.digitalocean.com/tdi/web-service:v1
+docker push registry.digitalocean.com/tdi/web-service:v1
+-->
+
+---
+
+## Activity: _nginx_ Container
+
+<!-- _class: invert -->
+
+_nginx_ is a web server and reverse proxy
+- It is distributed in the `nginx` container on Docker Hub
+- This container serves files from the `/usr/share/nginx/html` folder
+- The HTTP server listens on port 80
+
+Use the `nginx` image to serve the files in `exercises/nginx/html`
+
+See `exercises/nginx/README.md` for these instructions
+
+---
+
+## _nginx_ Solution #1: Mounting a Volume
+
+```bash
+docker run -it --rm -v $(pwd)/html:/usr/share/nginx/html -p 8080:80 nginx
+```
+This connects port 80 on the container to port 8080 on the host
+<small>On some systems, you may not be able to open low ports if not root.</small>
+
+Slightly fancier:
+```bash
+docker run -d --rm -v $(pwd)/html:/usr/share/nginx/html:ro -p 8080:80 nginx
+```
+`-d` Run as a daemon (disconnect from terminal)
+`-v ...:ro` Mount the volume **read-only**
+
+---
+
+## _nginx_ Solution #2: Custom Image
+
+Create a Dockerfile:
+```Dockerfile
+FROM nginx:latest
+
+COPY html /usr/share/nginx/html
+```
+
+Build an image: `docker build . -t my-nginx`
+
+Run a container: `docker run --rm -p 8080:80 my-nginx`
+
+---
+
+## Activity: _ollama_ Inference
+
+<!-- _class: invert -->
+
+_ollama_ is an **inference server** for large language models (LLMs)
+
+We will use it to serve the _qwen3:0.6b_ model
+
+It is packaged in the `ollama/ollama` image on [Docker Hub](https://hub.docker.com/r/ollama/ollama)
+
+Once a container is running, the model needs to be download.  Execute within the running container:
+```bash
+ollama pull qwen3:0.6b
+```
+
+---
+
+## Activity: _ollama_ Inference (Cont.)
+
+<!-- _class: invert -->
+
+The inference server runs on port 11434
+
+You can get a response from the model with the following command:
+```bash
+curl http://localhost:11434/api/generate -d '{
+  "model": "qwen3:0.6b",
+  "prompt": "What is 2+2?",
+  "stream": false
+}'
+```
+
+These instructions are available in `exercises/ollama/README.md`
+
+---
+
+## _ollama_ Solution
+
+```bash
+docker run -d -p 11434:11434 --name ollama-container ollama/ollama
+
+docker exec ollama-container ollama pull qwen3:0.6b
+```
+
+Then access port 11343 on localhost
+
+---
+
+## Feedback
+
+<!-- _class: lead invert -->
+![](images/session2-qr.png)
+
+[form.typeform.com/to/MNqDLRtz](https://form.typeform.com/to/MNqDLRtz)
+
+<!--
+Form link: https://form.typeform.com/to/MNqDLRtz
+-->
