@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "@marp-team/marp-cli": "^4.5.1"
+  },
+  "dependencies": {
+    "markdown-it-highlight-lines": "^1.0.2"
+  }
+}

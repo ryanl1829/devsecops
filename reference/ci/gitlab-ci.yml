@@ -1,0 +1,90 @@
+stages:
+  - test
+  - build
+  
+variables:
+  UV_IMAGE: "ghcr.io/astral-sh/uv:python3.14-alpine"
+  UV_LINK_MODE: copy
+
+unit-test:
+  stage: test
+  image: $UV_IMAGE
+  script:
+    - cd project/images/web-service/
+    - echo "Installing dependencies and running tests..."
+    - uv sync
+    - uv run pytest -v tests/test_unit.py
+
+lint:
+  stage: test
+  image: $UV_IMAGE
+  script:
+    - cd project/images/web-service
+    - uv sync
+    - uv run ruff check src/
+
+validate-k8s-manifests:
+  stage: test
+  script:
+    - |
+      curl -Lo kubeconform.tar.gz \
+      https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+    - tar xzf kubeconform.tar.gz kubeconform
+    - ./kubeconform -summary project/services
+
+integration-test:
+  stage: test
+  image: $UV_IMAGE
+
+  services:
+    - name: ollama/ollama:latest
+      alias: ollama
+  
+  variables:
+    OLLAMA_URL: "http://ollama:11434"
+    OLLAMA_MODEL: "qwen3:0.6b"
+    VISIT_COUNTER_FILE: "/tmp/visits.txt"
+
+  before_script:
+    - apk add --no-cache curl
+    - |
+      echo "waiting for ollama..."
+      for i in $(seq 1 30); do
+        if curl -sf "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
+          echo "ollama ready after ${i}0s-ish"
+          break
+        fi
+        sleep 2
+      done
+      curl -sf "${OLLAMA_URL}/api/tags" >/dev/null 2>&1 || {
+        echo "ollama service never became reachable"
+        exit 1
+      }
+    - |
+      echo "pulling ${OLLAMA_MODEL}..."
+      curl -sf -X POST "${OLLAMA_URL}/api/pull" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"${OLLAMA_MODEL}\", \"stream\": false}" \
+        --max-time 300
+  script:
+    - cd project/images/web-service
+    - uv sync
+    - uv run pytest -v tests/test_integration.py
+
+build-image:
+  stage: build
+  image: docker:27-cli
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - echo "Testing that the Docker image builds successfully..."
+    - docker build project/images/web-service -t web-service
+    - echo "Exporting image to a tarball file..."
+    - docker save -o web-service.tar web-service:latest
+  artifacts:
+    name: "docker-image-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - web-service.tar
+    expire_in: 1 day

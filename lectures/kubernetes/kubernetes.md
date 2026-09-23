@@ -866,7 +866,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: web-deployment
-  namespace: default
+  namespace: dso-project
   labels:
     app: web-service
 spec:
@@ -1127,7 +1127,7 @@ Add another YAML document to `web-service.yaml`
 <div class="columns">
 <div>
 
-```yaml {8-9,13}
+```yaml {9-10,14}
 ---
 apiVersion: v1
 kind: Service
@@ -1455,7 +1455,7 @@ clusterConfig:
         - visitors
 ```
 
-Full file at `reference/services/garage.yaml`
+Full file at `reference/helm/garage.yaml`
 
 <!--
 Got these values mostly from the documentation.  And some trial-and-error.
@@ -1530,6 +1530,39 @@ Some of these we will see in the coming weeks
 
 ---
 
+## ConfigMaps
+
+- **ConfigMaps** store key-value pairs separately from any resource
+  - Separate "dynamic" configuration from "static" values
+  - Share configuration options across several resources
+- Values can be used
+  - In a container launch command
+  - As values for environmental variables
+  - Mounted as files inside containers
+
+---
+
+## Secrets
+
+- **Secrets** are similar to ConfigMaps, but intended for sensitive data
+  - _e.g._ Passwords, tokens, keys
+- Keep such information out of pod images and specs
+- Any user with ability to create a pod can access Secrets
+  - Use RBAC to restrict access to Secrets
+  - Restrict access to Secret to necessary containers
+
+---
+
+## Role-Based Access Control (RBAC)
+
+- **Roles** describe certain capabilities: what actions are allows on which resources
+- **RoleBindings** grant certain roles to certain **Users**
+- Users may be:
+  - Human users, managed outside of Kubernetes
+  - Service Accounts, allowing pods to communicate with the K8s API server
+
+---
+
 ## Kubenetes Dashboard
 
 The currently-recommended dashboard is [Headlamp](https://headlamp.dev/), which can run as an local desktop application, or on the cluster itself
@@ -1576,15 +1609,6 @@ _E.g._ The _web-service_ should only have
 
 ---
 
-## Role-Based Access Control (RBAC)
-
-- **Roles** describe certain capabilities: what actions are allows on which resources
-- **RoleBindings** grant certain roles to certain **Users**
-- Users may be:
-  - Human users, managed outside of Kubernetes
-  - Service Accounts, allowing pods to communicate with the K8s API server
-
----
 
 ## Matching Pods to Nodes
 
