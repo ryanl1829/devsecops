@@ -1,7 +1,8 @@
 stages:
   - test
   - build
-  
+  - deploy
+
 variables:
   UV_IMAGE: "ghcr.io/astral-sh/uv:python3.14-alpine"
   UV_LINK_MODE: copy
@@ -39,7 +40,7 @@ integration-test:
   services:
     - name: ollama/ollama:latest
       alias: ollama
-  
+
   variables:
     OLLAMA_URL: "http://ollama:11434"
     OLLAMA_MODEL: "qwen3:0.6b"
@@ -78,13 +79,50 @@ build-image:
     - docker:27-dind
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
+    IMAGE_NAME: $CI_REGISTRY_IMAGE/web-server
   script:
-    - echo "Testing that the Docker image builds successfully..."
-    - docker build project/images/web-service -t web-service
-    - echo "Exporting image to a tarball file..."
-    - docker save -o web-service.tar web-service:latest
+    - IMAGE_TAG=$IMAGE_NAME:$(git rev-parse HEAD:project/images/web-service)
+    - echo "IMAGE_TAG=${IMAGE_TAG}" >> build.env
+    - echo "Building image ${IMAGE_TAG}"
+    - docker build project/images/web-service -t $IMAGE_TAG
+    - docker save -o web-service.tar $IMAGE_TAG
   artifacts:
     name: "docker-image-$CI_COMMIT_SHORT_SHA"
     paths:
       - web-service.tar
     expire_in: 1 day
+    reports:
+      dotenv: build.env
+
+deploy-image:
+  stage: deploy
+  dependencies:
+    - build-image
+  image: docker:27-cli
+  services:
+    - docker:27-dind
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  before_script:
+    - |
+      echo "$CI_REGISTRY_PASSWORD" |
+      docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+    - git config --global user.name "GitLab CI"
+    - git config --global user.email "ci@gitlab.com"
+  script:
+    - |
+      sed -i "s|image: ${CI_REGISTRY_IMAGE}.*|image: ${IMAGE_TAG}|g" \
+        project/services/web-service.yaml
+    - git diff --quiet || TAG_CHANGED=true
+    - |
+      if [ "$TAG_CHANGED" = true ]; then
+        echo "Changes to docker image.  Pushing new image."
+        docker load -i web-service.tar
+        docker push $IMAGE_TAG
+        git add project/services/web-service.yaml
+        git commit -m "Update web-service image tag [skip ci]
+      Now set to ${IMAGE_TAG}"
+        git push https://oauth2:${GITLAB_WRITE_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git HEAD:main
+      else
+        echo "Docker image unchanged."
+      fi

@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: test-application
+  namespace: argocd
+spec:
+  destination:
+    namespace: dso-project
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: project/services
+    # Adjust to your repository
+    repoURL: https://gitlab.com/pragdata/devsecops.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated:
+      enabled: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: garage
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://datahub-local.github.io/garage-helm
+      chart: garage
+      targetRevision: 0.8.0
+      helm:
+        valueFiles:
+          - $values/project/helm/garage.yaml
+    # Adjust to your repository
+    - repoURL: https://gitlab.com/pragdata/devsecops.git
+      targetRevision: HEAD
+      ref: values
+  destination:
+    namespace: garage
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      enabled: true
+    syncOptions:
+      - CreateNamespace=true

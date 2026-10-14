@@ -28,7 +28,7 @@ paginate: true
 # Continuous Integration Testing
 <!-- _class: lead -->
 
-Orchestrating Containers
+Automated Assurance
 
 ---
 
